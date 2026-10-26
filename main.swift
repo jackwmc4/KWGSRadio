@@ -2,21 +2,38 @@ import Cocoa
 import AVFoundation
 import MediaPlayer
 
-// Official KWGS 89.5 HD1 (NPR News) streams, published at publicradiotulsa.org/listen-live
-struct Stream {
+// Official Public Radio Tulsa streams, published at publicradiotulsa.org/listen-live.
+// Each channel is offered in two formats, giving eight feeds in all.
+struct Channel {
     let name: String
-    let url: URL
+    let program: String
+    let mount: String
+    func url(for format: Format) -> URL {
+        URL(string: "https://utulsa.streamguys1.com/\(mount)-\(format.suffix)")!
+    }
 }
-let streams = [
-    Stream(name: "Stereo (AAC)", url: URL(string: "https://utulsa.streamguys1.com/KWGSHD1-AAC")!),
-    Stream(name: "Mono (MP3)",   url: URL(string: "https://utulsa.streamguys1.com/KWGSHD1-MP3")!),
+struct Format {
+    let name: String
+    let suffix: String
+}
+let channels = [
+    Channel(name: "Public Radio 89.5 HD1", program: "NPR News", mount: "KWGSHD1"),
+    Channel(name: "Classical 88.7 HD1",    program: "Classical Music", mount: "KWTUHD1"),
+    Channel(name: "Jazz 89.5 HD2",         program: "Jazz", mount: "KWGSHD2"),
+    Channel(name: "BBC 89.5 HD3",          program: "BBC World Service", mount: "KWGSHD3"),
 ]
-let stationTitle = "KWGS 89.5 Public Radio Tulsa"
+let formats = [
+    Format(name: "Stereo (AAC)", suffix: "AAC"),
+    Format(name: "Mono (MP3)",   suffix: "MP3"),
+]
+let stationTitle = "Public Radio Tulsa"
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     let player = AVPlayer()
-    var streamIndex = UserDefaults.standard.integer(forKey: "streamIndex")
+    var channelIndex = UserDefaults.standard.integer(forKey: "channelIndex")
+    // Kept under the original key so an existing quality choice carries over
+    var formatIndex = UserDefaults.standard.integer(forKey: "streamIndex")
     var wantsPlayback = false
     var triedFallback = false
     var observers: [NSKeyValueObservation] = []
@@ -27,12 +44,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let statusLabel = NSTextField(labelWithString: "Stopped")
     let playButton = NSButton()
     let volumeSlider = NSSlider(value: 0.8, minValue: 0, maxValue: 1, target: nil, action: nil)
+    let channelPopup = NSPopUpButton()
     let qualityPopup = NSPopUpButton()
+    var channelMenuItems: [NSMenuItem] = []
+
+    var channel: Channel { channels[channelIndex] }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if streamIndex >= streams.count { streamIndex = 0 }
+        if channelIndex >= channels.count { channelIndex = 0 }
+        if formatIndex >= formats.count { formatIndex = 0 }
         buildWindow()
         buildMenu()
+        updateChannelUI()
         setupRemoteCommands()
 
         player.automaticallyWaitsToMinimizeStalling = true
@@ -51,12 +74,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Playback
 
-    func load(_ index: Int) {
-        streamIndex = index
+    func load(format index: Int) {
+        formatIndex = index
         UserDefaults.standard.set(index, forKey: "streamIndex")
         qualityPopup.selectItem(at: index)
 
-        let item = AVPlayerItem(url: streams[index].url)
+        let item = AVPlayerItem(url: channel.url(for: formats[index]))
         // Live radio: keep a small buffer so playback starts quickly
         item.preferredForwardBufferDuration = 5
 
@@ -79,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         wantsPlayback = true
         triedFallback = false
         // Always reconnect so a paused live stream resumes at the live edge, not minutes behind
-        load(streamIndex)
+        load(format: formatIndex)
         player.play()
         refreshStatus()
     }
@@ -93,12 +116,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func handleFailure(_ error: Error?) {
         guard wantsPlayback else { return }
-        // Fall back to the other stream once before giving up
+        // Fall back to the channel's other format once before giving up
         if !triedFallback {
             triedFallback = true
-            let other = (streamIndex + 1) % streams.count
-            statusLabel.stringValue = "Retrying with \(streams[other].name)…"
-            load(other)
+            let other = (formatIndex + 1) % formats.count
+            statusLabel.stringValue = "Retrying with \(formats[other].name)…"
+            load(format: other)
             player.play()
             return
         }
@@ -116,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         switch player.timeControlStatus {
         case .playing:
-            statusLabel.stringValue = "Live · \(streams[streamIndex].name)"
+            statusLabel.stringValue = "Live · \(formats[formatIndex].name)"
         case .waitingToPlayAtSpecifiedRate:
             statusLabel.stringValue = "Connecting…"
         case .paused:
@@ -143,9 +166,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func qualityChanged(_ sender: NSPopUpButton) {
-        streamIndex = sender.indexOfSelectedItem
-        UserDefaults.standard.set(streamIndex, forKey: "streamIndex")
+        formatIndex = sender.indexOfSelectedItem
+        UserDefaults.standard.set(formatIndex, forKey: "streamIndex")
         if wantsPlayback { play() }
+    }
+
+    @objc func channelChanged(_ sender: NSPopUpButton) {
+        selectChannel(sender.indexOfSelectedItem)
+    }
+
+    @objc func channelMenuChosen(_ sender: NSMenuItem) {
+        selectChannel(sender.tag)
+    }
+
+    func selectChannel(_ index: Int) {
+        channelIndex = index
+        UserDefaults.standard.set(index, forKey: "channelIndex")
+        updateChannelUI()
+        // Switching channels always starts playback, like changing stations on a radio
+        play()
+    }
+
+    func updateChannelUI() {
+        titleLabel.stringValue = channel.name
+        channelPopup.selectItem(at: channelIndex)
+        for item in channelMenuItems { item.state = item.tag == channelIndex ? .on : .off }
     }
 
     // MARK: Media keys and Control Center
@@ -161,8 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func updateNowPlaying() {
         let info = MPNowPlayingInfoCenter.default()
         info.nowPlayingInfo = [
-            MPMediaItemPropertyTitle: "NPR News",
-            MPMediaItemPropertyArtist: stationTitle,
+            MPMediaItemPropertyTitle: channel.program,
+            MPMediaItemPropertyArtist: "\(channel.name) · \(stationTitle)",
             MPNowPlayingInfoPropertyIsLiveStream: true,
         ]
         info.playbackState = wantsPlayback ? .playing : .stopped
@@ -208,8 +253,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let speaker = NSImageView(image: NSImage(systemSymbolName: "speaker.wave.2.fill", accessibilityDescription: "Volume")!)
         speaker.contentTintColor = .secondaryLabelColor
 
-        qualityPopup.addItems(withTitles: streams.map { $0.name })
-        qualityPopup.selectItem(at: streamIndex)
+        channelPopup.addItems(withTitles: channels.map { "\($0.name) · \($0.program)" })
+        channelPopup.target = self
+        channelPopup.action = #selector(channelChanged(_:))
+
+        qualityPopup.addItems(withTitles: formats.map { $0.name })
+        qualityPopup.selectItem(at: formatIndex)
         qualityPopup.target = self
         qualityPopup.action = #selector(qualityChanged(_:))
         qualityPopup.controlSize = .small
@@ -220,15 +269,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         bottom.alignment = .centerY
         bottom.spacing = 8
 
-        let root = NSStackView(views: [top, bottom])
+        let root = NSStackView(views: [top, channelPopup, bottom])
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 14
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         top.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -36).isActive = true
+        channelPopup.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -36).isActive = true
         bottom.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -36).isActive = true
 
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 140),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 180),
                           styleMask: [.titled, .closable, .miniaturizable],
                           backing: .buffered, defer: false)
         window.title = "KWGS Radio"
@@ -255,6 +305,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let toggle = NSMenuItem(title: "Play / Stop", action: #selector(togglePlay(_:)), keyEquivalent: "p")
         toggle.target = self
         controls.addItem(toggle)
+        controls.addItem(.separator())
+        // ⌘1–⌘4 switch channels
+        for (i, c) in channels.enumerated() {
+            let item = NSMenuItem(title: "\(c.name) · \(c.program)", action: #selector(channelMenuChosen(_:)), keyEquivalent: "\(i + 1)")
+            item.target = self
+            item.tag = i
+            controls.addItem(item)
+            channelMenuItems.append(item)
+        }
         controlsItem.submenu = controls
         main.addItem(controlsItem)
 
