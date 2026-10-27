@@ -2,30 +2,32 @@ import Cocoa
 import AVFoundation
 import MediaPlayer
 
-// Official Public Radio Tulsa streams, published at publicradiotulsa.org/listen-live.
-// Each channel is offered in two formats, giving eight feeds in all.
+// Each channel is offered in two formats, AAC and MP3, indexed like `formats`.
 struct Channel {
     let name: String
     let program: String
-    let mount: String
-    func url(for format: Format) -> URL {
-        URL(string: "https://utulsa.streamguys1.com/\(mount)-\(format.suffix)")!
+    let urls: [URL]
+    func url(for format: Int) -> URL { urls[format] }
+
+    // Official Public Radio Tulsa streams, published at publicradiotulsa.org/listen-live
+    static func publicRadioTulsa(_ name: String, _ program: String, mount: String) -> Channel {
+        Channel(name: name, program: program, urls: ["AAC", "MP3"].map {
+            URL(string: "https://utulsa.streamguys1.com/\(mount)-\($0)")!
+        })
     }
 }
-struct Format {
-    let name: String
-    let suffix: String
-}
 let channels = [
-    Channel(name: "Public Radio 89.5 HD1", program: "NPR News", mount: "KWGSHD1"),
-    Channel(name: "Classical 88.7 HD1",    program: "Classical Music", mount: "KWTUHD1"),
-    Channel(name: "Jazz 89.5 HD2",         program: "Jazz", mount: "KWGSHD2"),
-    Channel(name: "BBC 89.5 HD3",          program: "BBC World Service", mount: "KWGSHD3"),
+    Channel.publicRadioTulsa("Public Radio 89.5 HD1", "NPR News", mount: "KWGSHD1"),
+    Channel.publicRadioTulsa("Classical 88.7 HD1",    "Classical Music", mount: "KWTUHD1"),
+    Channel.publicRadioTulsa("Jazz 89.5 HD2",         "Jazz", mount: "KWGSHD2"),
+    Channel.publicRadioTulsa("BBC 89.5 HD3",          "BBC World Service", mount: "KWGSHD3"),
+    // WWLS-FM Oklahoma City, via Cumulus's Triton Digital mounts (still named for the old AM simulcast)
+    Channel(name: "Sports Animal 98.1", program: "Sports Talk", urls: [
+        URL(string: "https://playerservices.streamtheworld.com/api/livestream-redirect/WWLSAMAAC.aac")!,
+        URL(string: "https://playerservices.streamtheworld.com/api/livestream-redirect/WWLSAM.mp3")!,
+    ]),
 ]
-let formats = [
-    Format(name: "Stereo (AAC)", suffix: "AAC"),
-    Format(name: "Mono (MP3)",   suffix: "MP3"),
-]
+let formats = ["Stereo (AAC)", "Mono (MP3)"]
 let stationTitle = "Public Radio Tulsa"
 
 // Minimizing sends the player to the menu bar icon rather than the Dock
@@ -92,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         UserDefaults.standard.set(index, forKey: "streamIndex")
         qualityPopup.selectItem(at: index)
 
-        let item = AVPlayerItem(url: channel.url(for: formats[index]))
+        let item = AVPlayerItem(url: channel.url(for: index))
         // Live radio: keep a small buffer so playback starts quickly
         item.preferredForwardBufferDuration = 5
 
@@ -133,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !triedFallback {
             triedFallback = true
             let other = (formatIndex + 1) % formats.count
-            statusLabel.stringValue = "Retrying with \(formats[other].name)…"
+            statusLabel.stringValue = "Retrying with \(formats[other])…"
             load(format: other)
             player.play()
             return
@@ -152,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         switch player.timeControlStatus {
         case .playing:
-            statusLabel.stringValue = "Live · \(formats[formatIndex].name)"
+            statusLabel.stringValue = "Live · \(formats[formatIndex])"
         case .waitingToPlayAtSpecifiedRate:
             statusLabel.stringValue = "Connecting…"
         case .paused:
@@ -285,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         channelPopup.target = self
         channelPopup.action = #selector(channelChanged(_:))
 
-        qualityPopup.addItems(withTitles: formats.map { $0.name })
+        qualityPopup.addItems(withTitles: formats)
         qualityPopup.selectItem(at: formatIndex)
         qualityPopup.target = self
         qualityPopup.action = #selector(qualityChanged(_:))
@@ -335,7 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         toggle.target = self
         controls.addItem(toggle)
         controls.addItem(.separator())
-        // ⌘1–⌘4 switch channels
+        // ⌘1–⌘5 switch channels
         for (i, c) in channels.enumerated() {
             let item = NSMenuItem(title: "\(c.name) · \(c.program)", action: #selector(channelMenuChosen(_:)), keyEquivalent: "\(i + 1)")
             item.target = self
