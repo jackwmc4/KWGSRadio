@@ -23,6 +23,8 @@ It plays the station's official live streams directly with AVPlayer. Four channe
 - Keyboard media keys and Control Center's Now Playing controls work too.
 - The channel menu in the window, or Cmd-1 to Cmd-4, switches channels.
 - The quality menu switches between AAC and MP3. If one stream fails to connect, the app tries the other automatically.
+- A radio icon in the menu bar gives play/stop, channel switching and Quit. It fills in while playing.
+- Minimizing (the yellow button or Cmd-M) hides the player into that menu bar icon and removes it from the Dock. Choose Show Player from the icon to bring it back.
 - Stopping and restarting reconnects at the live point rather than resuming from where you paused.
 - Volume, channel and quality are remembered between launches.
 

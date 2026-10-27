@@ -28,8 +28,18 @@ let formats = [
 ]
 let stationTitle = "Public Radio Tulsa"
 
+// Minimizing sends the player to the menu bar icon rather than the Dock
+final class PlayerWindow: NSWindow {
+    var onMinimize: (() -> Void)?
+    override func miniaturize(_ sender: Any?) {
+        if let onMinimize { onMinimize() } else { super.miniaturize(sender) }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    var window: NSWindow!
+    var window: PlayerWindow!
+    var statusItem: NSStatusItem!
+    let statusToggleItem = NSMenuItem(title: "Play", action: #selector(togglePlay(_:)), keyEquivalent: "")
     let player = AVPlayer()
     var channelIndex = UserDefaults.standard.integer(forKey: "channelIndex")
     // Kept under the original key so an existing quality choice carries over
@@ -55,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if formatIndex >= formats.count { formatIndex = 0 }
         buildWindow()
         buildMenu()
+        buildStatusItem()
         updateChannelUI()
         setupRemoteCommands()
 
@@ -70,7 +81,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    // Quit on close explicitly. applicationShouldTerminateAfterLastWindowClosed would
+    // also fire when the window is hidden to the menu bar, quitting mid-stream.
+    func windowWillClose(_ notification: Notification) { NSApp.terminate(nil) }
 
     // MARK: Playback
 
@@ -152,6 +165,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func updateButton() {
         let symbol = wantsPlayback ? "stop.fill" : "play.fill"
         playButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: wantsPlayback ? "Stop" : "Play")
+        statusToggleItem.title = wantsPlayback ? "Stop" : "Play"
+        statusItem?.button?.image = menuBarImage()
     }
 
     // MARK: Actions
@@ -179,6 +194,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         selectChannel(sender.tag)
     }
 
+    @objc func showPlayer(_ sender: Any?) {
+        NSApp.setActivationPolicy(.regular)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func hideToMenuBar() {
+        window.orderOut(nil)
+        // Accessory apps have no Dock icon; the menu bar item is the way back
+        NSApp.setActivationPolicy(.accessory)
+    }
+
     func selectChannel(_ index: Int) {
         channelIndex = index
         UserDefaults.standard.set(index, forKey: "channelIndex")
@@ -190,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func updateChannelUI() {
         titleLabel.stringValue = channel.name
         channelPopup.selectItem(at: channelIndex)
+        statusItem?.button?.toolTip = "\(channel.name) · \(channel.program)"
         for item in channelMenuItems { item.state = item.tag == channelIndex ? .on : .off }
     }
 
@@ -278,12 +306,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         channelPopup.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -36).isActive = true
         bottom.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -36).isActive = true
 
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 180),
+        window = PlayerWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 180),
                           styleMask: [.titled, .closable, .miniaturizable],
                           backing: .buffered, defer: false)
         window.title = "KWGS Radio"
         window.contentView = root
         window.delegate = self
+        window.onMinimize = { [weak self] in self?.hideToMenuBar() }
         window.center()
         window.setFrameAutosaveName("KWGSPlayerWindow")
         window.makeKeyAndOrderFront(nil)
@@ -319,12 +348,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")
-        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Minimize to Menu Bar", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowItem.submenu = windowMenu
         main.addItem(windowItem)
 
         NSApp.mainMenu = main
+    }
+
+    func menuBarImage() -> NSImage? {
+        let image = NSImage(systemSymbolName: wantsPlayback ? "radio.fill" : "radio", accessibilityDescription: "KWGS Radio")
+        image?.isTemplate = true
+        return image
+    }
+
+    func buildStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.image = menuBarImage()
+
+        let menu = NSMenu()
+        let show = NSMenuItem(title: "Show Player", action: #selector(showPlayer(_:)), keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
+        menu.addItem(.separator())
+        statusToggleItem.target = self
+        menu.addItem(statusToggleItem)
+        menu.addItem(.separator())
+        for (i, c) in channels.enumerated() {
+            let item = NSMenuItem(title: "\(c.name) · \(c.program)", action: #selector(channelMenuChosen(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = i
+            menu.addItem(item)
+            channelMenuItems.append(item)
+        }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit KWGS Radio", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        statusItem.menu = menu
     }
 }
 
